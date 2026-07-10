@@ -1,10 +1,59 @@
 import logging
+import re
 from html.parser import HTMLParser
 from typing import List
 
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger("confluence-mcp-server")
+
+
+def _escape(text: str) -> str:
+    """HTML 转义：Confluence storage 是严格 XHTML，裸 & < > 会被服务端判为非法实体返回 400。"""
+    if not text:
+        return ""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _inline(text: str) -> str:
+    """处理行内 markdown 格式：`code`、**bold**、*italic*。
+    先转义再还原行内 code 的内容，保证 code 内的 * 等不被误解析。
+    """
+    if not text:
+        return ""
+    escaped = _escape(text)
+    # 用占位符保护行内 code（code 内的 * _ 等不解析）
+    placeholders: List[str] = []
+
+    def stash_code(m):
+        placeholders.append(m.group(1))
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    escaped = re.sub(r"`([^`]+)`", stash_code, escaped)
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", escaped)
+    # 还原 code 占位符
+    escaped = re.sub(r"\x00(\d+)\x00", lambda m: f"<code>{placeholders[int(m.group(1))]}</code>", escaped)
+    return escaped
+
+
+def _is_table_row(stripped: str) -> bool:
+    return stripped.startswith("|") and stripped.endswith("|")
+
+
+def _is_table_separator(stripped: str) -> bool:
+    # 形如 | --- | --- | 的分隔行
+    inner = stripped.strip("|")
+    parts = [p.strip() for p in inner.split("|")]
+    return bool(parts) and all(set(p) <= set("-: ") and "-" in p for p in parts)
+
+
+def _split_row(stripped: str) -> List[str]:
+    return [c.strip() for c in stripped.strip("|").split("|")]
+
+
+# 有序列表项：1. / 10. 等数字紧跟点+空格
+_OL_RE = re.compile(r"^([0-9]{1,9})\.\s+")
 
 
 class ConfluenceToMarkdownParser(HTMLParser):
@@ -184,64 +233,148 @@ def markdown_to_confluence(markdown_content: str) -> str:
         code_lang = ""
         in_list = False
         list_type = ""
+        in_table = False
+        in_quote = False
+
+        def close_list():
+            nonlocal in_list
+            if in_list:
+                html_lines.append(f"</{list_type}>")
+                in_list = False
+
+        def close_table():
+            nonlocal in_table
+            if in_table:
+                html_lines.append("</tbody></table>")
+                in_table = False
+
+        def close_quote():
+            nonlocal in_quote
+            if in_quote:
+                html_lines.append("</blockquote>")
+                in_quote = False
 
         for line in lines:
             stripped = line.strip()
 
             if stripped.startswith("```"):
+                close_list()
+                close_table()
+                close_quote()
                 if in_code_block:
-                    html_lines.append("</pre>")
+                    # 结束代码块：闭合 code 宏的 CDATA 与 structured-macro
+                    html_lines.append("]]></ac:plain-text-body></ac:structured-macro>")
                     in_code_block = False
                 else:
                     code_lang = stripped[3:].strip()
-                    html_lines.append(f'<pre class="language-{code_lang}"><code>')
+                    # Confluence storage 格式不支持裸 <pre>/<code>，必须用 code 宏，
+                    # 否则服务端校验 storage XML 会直接返回 400。
+                    if code_lang:
+                        html_lines.append(
+                            f'<ac:structured-macro ac:name="code">'
+                            f'<ac:parameter ac:name="language">{_escape(code_lang)}</ac:parameter>'
+                            f'<ac:plain-text-body><![CDATA['
+                        )
+                    else:
+                        html_lines.append(
+                            '<ac:structured-macro ac:name="code">'
+                            "<ac:plain-text-body><![CDATA["
+                        )
                     in_code_block = True
                 continue
 
             if in_code_block:
+                # 代码块内容原样保留，不做任何 markdown 转义
                 html_lines.append(line)
                 continue
 
-            if stripped.startswith("# "):
-                html_lines.append(f"<h1>{stripped[2:]}</h1>")
-            elif stripped.startswith("## "):
-                html_lines.append(f"<h2>{stripped[3:]}</h2>")
-            elif stripped.startswith("### "):
-                html_lines.append(f"<h3>{stripped[4:]}</h3>")
-            elif stripped.startswith("#### "):
-                html_lines.append(f"<h4>{stripped[5:]}</h4>")
-            elif stripped.startswith("##### "):
-                html_lines.append(f"<h5>{stripped[6:]}</h5>")
-            elif stripped.startswith("###### "):
-                html_lines.append(f"<h6>{stripped[7:]}</h6>")
-            elif stripped.startswith("- ") or stripped.startswith("* "):
+            # 表格行处理（| a | b |）
+            if _is_table_row(stripped):
+                if _is_table_separator(stripped):
+                    # 分隔行：跳过，表头已在上一行输出
+                    continue
+                cells = _split_row(stripped)
+                if not in_table:
+                    close_list()
+                    close_quote()
+                    html_lines.append("<table><thead><tr>")
+                    html_lines.append("".join(f"<th>{_inline(c)}</th>" for c in cells))
+                    html_lines.append("</tr></thead><tbody>")
+                    in_table = True
+                else:
+                    html_lines.append("<tr>")
+                    html_lines.append("".join(f"<td>{_inline(c)}</td>" for c in cells))
+                    html_lines.append("</tr>")
+                continue
+            close_table()
+
+            # 引用块（连续 > 合并为一个 blockquote）
+            if stripped.startswith("> "):
+                if not in_quote:
+                    close_list()
+                    html_lines.append("<blockquote>")
+                    in_quote = True
+                html_lines.append(f"<p>{_inline(stripped[2:])}</p>")
+                continue
+            close_quote()
+
+            # 标题（按 # 数量优先匹配，避免 ## 被 # 误命中）
+            heading = None
+            for level in (6, 5, 4, 3, 2, 1):
+                prefix = "#" * level + " "
+                if stripped.startswith(prefix):
+                    heading = (level, stripped[len(prefix):])
+                    break
+            if heading:
+                close_list()
+                level, text = heading
+                html_lines.append(f"<h{level}>{_inline(text)}</h{level}>")
+                continue
+
+            # 无序列表项
+            if stripped.startswith("- ") or stripped.startswith("* "):
+                close_quote()
                 if not in_list or list_type != "ul":
-                    if in_list:
-                        html_lines.append(f"</{list_type}>")
+                    close_list()
                     html_lines.append("<ul>")
                     in_list = True
                     list_type = "ul"
-                html_lines.append(f"<li>{stripped[2:]}</li>")
-            elif stripped.startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
+                html_lines.append(f"<li>{_inline(stripped[2:])}</li>")
+                continue
+
+            # 有序列表项（1. 2. ... 10. 等）
+            ol_match = _OL_RE.match(stripped)
+            if ol_match:
+                close_quote()
                 if not in_list or list_type != "ol":
-                    if in_list:
-                        html_lines.append(f"</{list_type}>")
+                    close_list()
                     html_lines.append("<ol>")
                     in_list = True
                     list_type = "ol"
-                html_lines.append(f"<li>{stripped[stripped.index('.') + 2:]}</li>")
-            elif stripped.startswith("> "):
-                html_lines.append(f"<p><strong>提示:</strong> {stripped[2:]}</p>")
-            elif stripped.startswith("---"):
-                html_lines.append("<hr/>")
-            elif stripped:
-                if in_list:
-                    html_lines.append(f"</{list_type}>")
-                    in_list = False
-                html_lines.append(f"<p>{stripped}</p>")
+                content = stripped[ol_match.end():]
+                html_lines.append(f"<li>{_inline(content)}</li>")
+                continue
 
-        if in_list:
-            html_lines.append(f"</{list_type}>")
+            # 分隔线
+            if stripped.startswith("---"):
+                close_list()
+                close_quote()
+                html_lines.append("<hr/>")
+                continue
+
+            # 普通段落
+            if stripped:
+                close_list()
+                close_quote()
+                html_lines.append(f"<p>{_inline(stripped)}</p>")
+
+        close_list()
+        close_table()
+        close_quote()
+
+        # 代码块未闭合（markdown 末尾漏写 ```）时补上闭合，避免 storage XML 不完整被 400
+        if in_code_block:
+            html_lines.append("]]></ac:plain-text-body></ac:structured-macro>")
 
         return "\n".join(html_lines)
 
