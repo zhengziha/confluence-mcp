@@ -131,6 +131,97 @@ confluence-mcp-server
 }
 ```
 
+### 在 Claude Code 中使用
+
+#### 方式一：通过 CLAUDE.md 配置
+
+1. 在项目根目录创建或编辑 `CLAUDE.md` 文件
+2. 添加以下配置：
+
+```markdown
+---
+skills:
+  - name: confluence-skill
+    type: mcp
+    server:
+      command: python
+      args: ["-m", "src.main"]
+      env:
+        CONFLUENCE_BASE_URL: "${CONFLUENCE_BASE_URL}"
+        CONFLUENCE_USERNAME: "${CONFLUENCE_USERNAME}"
+        CONFLUENCE_API_TOKEN: "${CONFLUENCE_API_TOKEN}"
+---
+
+# Confluence 知识库技能
+
+使用 Confluence 技能可以搜索、读取、创建和更新 Confluence 文档。
+```
+
+3. 在对话中直接使用自然语言触发：
+   - "帮我搜索 Java 编码规范文档"
+   - "获取页面 63777422 的内容"
+
+#### 方式二：手动启动 MCP Server
+
+1. 启动 MCP Server：
+```bash
+cd /path/to/confluence-skill
+source .venv/bin/activate
+confluence-mcp-server
+```
+
+2. 在 Claude Code 设置中添加 MCP Server：
+   - 打开 Claude Code 设置
+   - 找到 MCP Servers 配置
+   - 添加新服务器：`http://localhost:8000`
+
+### 在 Codex 中使用
+
+1. 在项目目录中创建 `.codex/mcp.json` 配置文件：
+
+```json
+{
+  "servers": [
+    {
+      "name": "confluence-mcp-server",
+      "type": "http",
+      "url": "http://localhost:8000",
+      "description": "Confluence MCP Server"
+    }
+  ]
+}
+```
+
+2. 启动 MCP Server：
+```bash
+cd /path/to/confluence-skill
+source .venv/bin/activate
+confluence-mcp-server
+```
+
+3. 在 Codex 对话中使用 `@confluence-mcp-server` 触发技能
+
+### 在 OpenCode 中使用
+
+1. 在项目目录中创建 `.opencode/mcp.json` 配置文件：
+
+```json
+{
+  "name": "confluence-mcp-server",
+  "command": "python",
+  "args": ["-m", "src.main"],
+  "env": {
+    "CONFLUENCE_BASE_URL": "${CONFLUENCE_BASE_URL}",
+    "CONFLUENCE_USERNAME": "${CONFLUENCE_USERNAME}",
+    "CONFLUENCE_API_TOKEN": "${CONFLUENCE_API_TOKEN}"
+  },
+  "description": "Confluence MCP Server for reading and writing Confluence pages"
+}
+```
+
+2. OpenCode 会自动识别配置并启动 MCP Server
+3. 在对话中使用 `@confluence-mcp-server` 触发技能
+
 ### 使用 MCP Python SDK
 
 ```python
