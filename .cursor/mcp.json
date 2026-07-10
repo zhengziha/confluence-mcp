@@ -1,0 +1,11 @@
+{
+  "name": "confluence-mcp-server",
+  "command": "python",
+  "args": ["-m", "src.main"],
+  "env": {
+    "CONFLUENCE_BASE_URL": "${CONFLUENCE_BASE_URL}",
+    "CONFLUENCE_USERNAME": "${CONFLUENCE_USERNAME}",
+    "CONFLUENCE_API_TOKEN": "${CONFLUENCE_API_TOKEN}"
+  },
+  "description": "Confluence MCP Server for reading and writing Confluence pages"
+}
