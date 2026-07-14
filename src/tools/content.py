@@ -218,6 +218,7 @@ def get_page_by_title(
     title: str,
     space_key: str,
     expand: str = "body.storage,space,version",
+    limit: int = 20,
 ) -> dict:
     """
     根据标题和空间搜索页面。
@@ -226,11 +227,12 @@ def get_page_by_title(
         title: 页面标题（精确匹配）
         space_key: 空间键
         expand: 需要展开的字段
+        limit: 返回结果数量限制，默认20
 
     Returns:
         页面详情字典，如果找到多个结果则返回列表
     """
-    logger.info(f"按标题搜索页面: title={title}, space_key={space_key}")
+    logger.info(f"按标题搜索页面: title={title}, space_key={space_key}, limit={limit}")
 
     cql = f'title = "{title}" AND space = "{space_key}"'
-    return search_pages(cql=cql, limit=5, expand=expand)
+    return search_pages(cql=cql, limit=limit, expand=expand)

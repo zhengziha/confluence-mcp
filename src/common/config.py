@@ -30,4 +30,7 @@ def validate_confluence_config() -> tuple[bool, str]:
 
 
 def get_api_base_url() -> str:
+    context_path = CONFLUENCE_CFG["context_path"].strip("/")
+    if context_path:
+        return f"{CONFLUENCE_CFG['base_url']}/{context_path}/rest/api/{CONFLUENCE_CFG['api_version']}"
     return f"{CONFLUENCE_CFG['base_url']}/rest/api/{CONFLUENCE_CFG['api_version']}"
