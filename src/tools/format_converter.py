@@ -16,13 +16,13 @@ def _escape(text: str) -> str:
 
 
 def _inline(text: str) -> str:
-    """处理行内 markdown 格式：`code`、**bold**、*italic*。
-    先转义再还原行内 code 的内容，保证 code 内的 * 等不被误解析。
+    """处理行内 markdown 格式：`code`、**bold**、*italic*、[text](url)。
+    先转义再还原行内 code 的内容，保证 code 内的 * _ 等不被误解析。
     """
     if not text:
         return ""
     escaped = _escape(text)
-    # 用占位符保护行内 code（code 内的 * _ 等不解析）
+    # 用占位符保护行内 code（code 内的 * _ []() 等不解析）
     placeholders: List[str] = []
 
     def stash_code(m):
@@ -32,6 +32,22 @@ def _inline(text: str) -> str:
     escaped = re.sub(r"`([^`]+)`", stash_code, escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", escaped)
+
+    def replace_link(match):
+        text = match.group(1)
+        url = match.group(2)
+        balance = 0
+        for i, char in enumerate(url):
+            if char == "(":
+                balance += 1
+            elif char == ")":
+                balance -= 1
+                if balance < 0:
+                    url = url[:i]
+                    break
+        return f'<a href="{url}">{text}</a>'
+
+    escaped = re.sub(r"\[([^\]]+)\]\((.+)\)", replace_link, escaped)
     # 还原 code 占位符
     escaped = re.sub(r"\x00(\d+)\x00", lambda m: f"<code>{placeholders[int(m.group(1))]}</code>", escaped)
     return escaped
@@ -65,6 +81,7 @@ class ConfluenceToMarkdownParser(HTMLParser):
         self.list_type = None
         self.in_code_block = False
         self.code_lang = ""
+        self.current_link = ""
 
     def handle_starttag(self, tag, attrs):
         attr_dict = dict(attrs)
@@ -175,32 +192,31 @@ def confluence_to_markdown(html_content: str) -> str:
         soup = BeautifulSoup(html_content, "html.parser")
 
         for macro in soup.find_all("ac:structured-macro"):
-            macro_name = macro.find("ac:name")
-            if macro_name:
-                name = macro_name.get_text().strip()
-                if name == "code":
-                    code_body = macro.find("ac:plain-text-body")
-                    if code_body:
-                        code_text = code_body.get_text().strip()
-                        language = ""
-                        params = macro.find_all("ac:parameter")
-                        for param in params:
-                            if param.find("ac:name") and param.find("ac:name").get_text() == "language":
-                                if param.find("ac:value"):
-                                    language = param.find("ac:value").get_text()
-                        code_block = f"```\n{code_text}\n```"
-                        if language:
-                            code_block = f"```\n{code_text}\n```"
-                        macro.replace_with(BeautifulSoup(code_block, "html.parser"))
-                elif name == "info" or name == "note" or name == "warning":
-                    body = macro.find("ac:plain-text-body") or macro.find("ac:rich-text-body")
-                    if body:
-                        text = body.get_text().strip()
-                        if name == "warning":
-                            note_block = f"> ⚠️ **警告**: {text}\n"
-                        else:
-                            note_block = f"> ℹ️ **提示**: {text}\n"
-                        macro.replace_with(BeautifulSoup(note_block, "html.parser"))
+            name = macro.get("ac:name", "")
+            if name == "code":
+                code_body = macro.find("ac:plain-text-body")
+                if code_body:
+                    code_text = code_body.get_text().strip()
+                    language = ""
+                    params = macro.find_all("ac:parameter")
+                    for param in params:
+                        if param.get("ac:name") == "language":
+                            value_tag = param.find("ac:value")
+                            if value_tag:
+                                language = value_tag.get_text()
+                    code_block = f"```\n{code_text}\n```"
+                    if language:
+                        code_block = f"```{language}\n{code_text}\n```"
+                    macro.replace_with(BeautifulSoup(code_block, "html.parser"))
+            elif name == "info" or name == "note" or name == "warning":
+                body = macro.find("ac:plain-text-body") or macro.find("ac:rich-text-body")
+                if body:
+                    text = body.get_text().strip()
+                    if name == "warning":
+                        note_block = f"> ⚠️ **警告**: {text}\n"
+                    else:
+                        note_block = f"> ℹ️ **提示**: {text}\n"
+                    macro.replace_with(BeautifulSoup(note_block, "html.parser"))
 
         cleaned_html = str(soup)
 
