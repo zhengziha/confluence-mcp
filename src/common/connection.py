@@ -171,3 +171,90 @@ class ConfluenceConnection:
     @classmethod
     def delete(cls, endpoint: str, **kwargs) -> None:
         cls.request("DELETE", endpoint, **kwargs)
+
+    @classmethod
+    def upload_attachment_bytes(
+        cls,
+        page_id: str,
+        content: bytes,
+        file_name: str,
+        content_type: str = "application/octet-stream",
+        comment: Optional[str] = None,
+    ) -> dict:
+        """从内存字节上传附件到页面（同名则覆盖更新）。"""
+        session = cls.get_session()
+        endpoint = f"/content/{page_id}/child/attachment"
+        url = f"{get_api_base_url()}{endpoint}"
+
+        try:
+            existing = cls.get(endpoint, params={"filename": file_name, "limit": 1})
+            if existing.get("size", 0) > 0:
+                existing_id = existing["results"][0]["id"]
+                url = f"{get_api_base_url()}/content/{page_id}/child/attachment/{existing_id}/data"
+                logger.info(f"更新现有附件: {file_name} (ID: {existing_id})")
+        except Exception as e:
+            logger.debug(f"检查附件时出错（按新附件处理）: {e}")
+
+        files = {"file": (file_name, content, content_type)}
+        data = {}
+        if comment:
+            data["comment"] = comment
+
+        # multipart 不能带默认的 application/json Content-Type
+        headers = {"X-Atlassian-Token": "nocheck", "Accept": "application/json"}
+        # 去掉 session 默认 Content-Type，让 requests 自动设置 multipart boundary
+        prepare_headers = {k: v for k, v in session.headers.items() if k.lower() != "content-type"}
+        prepare_headers.update(headers)
+
+        logger.info(f"上传附件: {file_name} -> page {page_id}")
+        response = session.post(url, files=files, data=data, headers=prepare_headers)
+
+        if response.status_code == 401 and cls._login_attempts < cls._MAX_LOGIN_ATTEMPTS:
+            logger.info("认证失效，重新登录后重试附件上传...")
+            cls._is_authenticated = False
+            cls._session = None
+            session = cls.get_session()
+            prepare_headers = {
+                k: v for k, v in session.headers.items() if k.lower() != "content-type"
+            }
+            prepare_headers.update(headers)
+            response = session.post(url, files=files, data=data, headers=prepare_headers)
+
+        if response.status_code >= 400:
+            logger.error(f"附件上传失败: {response.status_code} - {response.text[:200]}")
+            response.raise_for_status()
+
+        result = response.json()
+        if "results" in result and result["results"]:
+            attachment_info = result["results"][0]
+        else:
+            attachment_info = result
+
+        logger.info(
+            f"附件上传成功: {file_name} "
+            f"(ID: {attachment_info.get('id')}, 大小: {len(content)} bytes)"
+        )
+        return attachment_info
+
+    @classmethod
+    def upload_attachment(
+        cls,
+        page_id: str,
+        file_path: str,
+        file_name: Optional[str] = None,
+        comment: Optional[str] = None,
+    ) -> dict:
+        """从本地文件路径上传附件到页面。"""
+        from pathlib import Path
+
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+
+        name = file_name or path.name
+        return cls.upload_attachment_bytes(
+            page_id=page_id,
+            content=path.read_bytes(),
+            file_name=name,
+            comment=comment,
+        )

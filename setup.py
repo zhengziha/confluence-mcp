@@ -11,6 +11,7 @@ setup(
         "requests>=2.31.0",
         "python-dotenv>=1.0.0",
         "beautifulsoup4>=4.12.0",
+        "html2text>=2024.2.26",
         "markdown>=3.5.0",
         "click>=8.0.0",
     ],

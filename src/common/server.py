@@ -12,7 +12,14 @@ def load_tools():
 
 mcp = FastMCP(
     "Confluence MCP Server",
-    dependencies=["mcp[cli]", "requests", "python-dotenv", "beautifulsoup4", "markdown"],
+    dependencies=[
+        "mcp[cli]",
+        "requests",
+        "python-dotenv",
+        "beautifulsoup4",
+        "html2text",
+        "markdown",
+    ],
 )
 
 load_tools()
