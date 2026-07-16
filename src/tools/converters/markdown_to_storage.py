@@ -186,9 +186,16 @@ class MarkdownToStorageConverter:
         )
 
     def _remove_metadata(self, markdown_content: str) -> str:
-        """移除 YAML 元数据头"""
-        pattern = re.compile(r'^---\s*\n.*?\n---\s*\n', re.DOTALL | re.MULTILINE)
-        return pattern.sub('', markdown_content)
+        """移除 YAML 元数据头（仅文档开头的 --- ... --- 块）
+
+        注意：正则必须用 \\A 锚定字符串起始，且不能用 re.MULTILINE。
+        否则正文中的「---」水平分隔线会被误判为 YAML 边界，
+        导致两个分隔线之间的整段正文（含章节）被当作 metadata 删除。
+        """
+        if not markdown_content.startswith('---'):
+            return markdown_content
+        pattern = re.compile(r'\A---[ \t]*\n.*?\n---[ \t]*\n?', re.DOTALL)
+        return pattern.sub('', markdown_content, count=1)
 
     def _html_to_storage(self, html_content: str) -> str:
         """转换 HTML 到 Confluence Storage Format"""

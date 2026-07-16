@@ -131,6 +131,39 @@ class TestMarkdownToStorage:
         assert "title: 测试" not in result
         assert "正文内容" in result
 
+    def test_horizontal_rule_not_treated_as_metadata(self):
+        """正文中的 --- 水平分隔线不能被误判为 YAML front matter 边界，
+        否则两个分隔线之间的整段正文（含章节）会被删除。回归测试。"""
+        md = (
+            "# 文档标题\n\n"
+            "第一段正文。\n\n"
+            "---\n\n"
+            "## 章节A\n\n"
+            "章节A的正文内容。\n\n"
+            "---\n\n"
+            "## 章节B\n\n"
+            "章节B的正文内容。\n"
+        )
+        result, _ = self.converter.convert(md)
+        assert "章节A" in result
+        assert "章节A的正文内容" in result
+        assert "章节B" in result
+        assert "章节B的正文内容" in result
+
+    def test_metadata_only_stripped_at_document_start(self):
+        """非文档开头出现的 --- ... --- 不能被当 YAML 删除。"""
+        md = (
+            "# 标题\n\n"
+            "引言。\n\n"
+            "---\n\n"
+            "key: value\n\n"
+            "---\n\n"
+            "## 后续章节\n"
+        )
+        result, _ = self.converter.convert(md)
+        assert "后续章节" in result
+        assert "key: value" in result
+
     def test_inline_code_and_links(self):
         result, _ = self.converter.convert(
             "使用 `SELECT * FROM users` 查询\n\n"
